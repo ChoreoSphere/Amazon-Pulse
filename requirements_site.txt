@@ -1,0 +1,9 @@
+# Python side of Amazon Pulse (fetch_nisar.py + build_site.py)
+asf_search
+h5py
+rasterio
+numpy
+scipy
+pillow
+mercantile
+requests

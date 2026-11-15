@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Amazon Pulse — NISAR + Sentinel-1 deforestation & flood tracker</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+  :root { --bg:#0b1220; --fg:#e6edf3; --muted:#8b98a9; --acc:#00e5ff; --red:#ff1744; --grn:#69f0ae; --amb:#ffd54f; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:#05080f; color:var(--fg);
+    font:13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow:hidden; }
+  #stage { position:fixed; inset:0; }
+  .map { position:absolute; inset:0; }
+  #mapB { clip-path: inset(0 0 0 50%); }
+  #divider { position:absolute; top:0; bottom:0; left:50%; width:4px; margin-left:-2px; background:var(--acc);
+    cursor:ew-resize; z-index:5; box-shadow:0 0 12px rgba(0,229,255,.7); touch-action:none; }
+  #divider::after { content:"◀ ▶"; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    background:var(--bg); color:var(--acc); border:2px solid var(--acc); border-radius:20px; padding:6px 8px; font-size:11px; white-space:nowrap; }
+  .cap { position:absolute; bottom:28px; z-index:4; background:rgba(11,18,32,.88); padding:6px 12px; border-radius:6px; font-weight:600; pointer-events:none; }
+  #capA { left:392px; } #capB { right:16px; }
+  #story { position:absolute; top:14px; left:50%; transform:translateX(-50%); z-index:6; max-width:520px; display:none;
+    background:rgba(11,18,32,.93); border:1px solid var(--acc); border-radius:10px; padding:10px 14px; text-align:center; }
+  #panel { position:fixed; top:12px; left:12px; bottom:12px; width:364px; z-index:10; overflow:auto; padding:14px;
+    background:rgba(11,18,32,.94); border:1px solid #1e2a3d; border-radius:12px; backdrop-filter:blur(8px); }
+  h1 { margin:0; font-size:22px; color:var(--acc); letter-spacing:.5px; }
+  .sub { color:var(--muted); font-size:11px; margin:2px 0 8px; }
+  h2 { margin:16px 0 6px; font-size:12px; color:var(--acc); letter-spacing:.8px; text-transform:uppercase; }
+  .pill { display:inline-block; background:#0f2a1f; color:#69f0ae; border:1px solid #1b5e3b; border-radius:20px; padding:2px 10px; font-size:11px; }
+  .btn { display:block; width:100%; text-align:left; background:#111b2e; color:var(--fg); border:1px solid #1e2a3d;
+    border-radius:8px; padding:7px 10px; margin:4px 0; cursor:pointer; font:inherit; }
+  .btn:hover { border-color:var(--acc); } .btn.on { background:#0e3340; border-color:var(--acc); } .btn:disabled { opacity:.35; cursor:default; }
+  .row { display:flex; gap:6px; } .row .btn { text-align:center; margin:4px 0; }
+  label.chk { display:flex; align-items:center; gap:8px; margin:5px 0; cursor:pointer; }
+  select { width:100%; background:#111b2e; color:var(--fg); border:1px solid #1e2a3d; border-radius:8px; padding:6px; font:inherit; }
+  input[type=range] { width:100%; accent-color:var(--acc); }
+  .big { font-size:17px; font-weight:700; } .muted { color:var(--muted); font-size:11px; }
+  .kpis { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; }
+  .kpi { background:#0a111e; border:1px solid #1e2a3d; border-radius:8px; padding:6px 8px; } .kpi b { display:block; font-size:16px; }
+  #confbar { display:flex; height:10px; border-radius:5px; overflow:hidden; margin:8px 0 2px; background:#1e2a3d; }
+  canvas { width:100%; background:#0a111e; border:1px solid #1e2a3d; border-radius:8px; margin-top:6px; display:block; }
+  #plist { max-height:230px; overflow:auto; }
+  .badge { display:inline-block; border-radius:10px; padding:1px 8px; margin:2px 3px 2px 0; font-size:11px; border:1px solid #2b3a52; }
+  .b-ok { color:#69f0ae; border-color:#1b5e3b; } .b-no { color:#ff8a80; border-color:#7f2a2a; } .b-na { color:var(--muted); } .b-risk { color:#ffd54f; border-color:#7a6320; }
+  .chip { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:6px; vertical-align:-1px; }
+  details { margin-top:10px; } summary { cursor:pointer; color:var(--acc); }
+  footer { margin-top:16px; color:var(--muted); font-size:10px; line-height:1.4; }
+  #err { color:#ffd54f; margin-top:6px; }
+  .maplibregl-ctrl-attrib { font-size:10px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="mapA" class="map"></div>
+  <div id="mapB" class="map"></div>
+  <div id="divider"></div>
+  <div id="capA" class="cap">◀ BEFORE</div>
+  <div id="capB" class="cap">AFTER ▶</div>
+  <div id="story"></div>
+</div>
+
+<div id="panel">
+  <h1>🌎 AMAZON PULSE</h1>
+  <div class="sub">NISAR L-band + Sentinel-1 · deforestation, flooded forest & open water · NASA Space Apps 2026</div>
+  <span class="pill" id="ready">loading…</span>
+  <div id="err"></div>
+
+  <h2>Dashboard <span class="muted" id="dscope"></span></h2>
+  <div class="kpis">
+    <div class="kpi"><span class="muted">cleared</span><b id="kHa">—</b></div>
+    <div class="kpi"><span class="muted">high confidence</span><b id="kHigh" style="color:var(--grn)">—</b></div>
+    <div class="kpi"><span class="muted">patches</span><b id="kN">—</b></div>
+  </div>
+  <div id="confbar"></div>
+  <div class="muted" id="confleg"></div>
+  <canvas id="cMonth" width="660" height="230"></canvas>
+
+  <h2>Hotspots · click to fly</h2>
+  <button class="btn" id="bBasin">🌎 Whole basin</button>
+  <div id="alist"></div>
+  <div class="row"><button class="btn" id="tour">🎬 Guided tour</button></div>
+
+  <h2>Time · Sentinel-1 months</h2>
+  <div class="big" id="klabel">—</div>
+  <input id="krange" type="range" min="1" max="9" value="9" step="1">
+  <div class="row"><button class="btn" id="play">▶ Play time-lapse</button></div>
+
+  <h2>View</h2>
+  <div class="row">
+    <button class="btn on" id="mRadar">📡 C-band</button>
+    <button class="btn" id="mL">📡 L-band NISAR</button>
+    <button class="btn" id="mOpt">🛰 Optical</button>
+  </div>
+  <div class="row">
+    <button class="btn" id="vTop">⬆ Top view</button>
+    <button class="btn" id="v3d">🏔 3D view</button>
+  </div>
+  <label class="chk"><input type="checkbox" id="cDate" checked> Clearing date (colour = month)</label>
+  <label class="chk"><input type="checkbox" id="cConf"> L-band verdict on every alert</label>
+  <label class="chk"><input type="checkbox" id="cWater"> Water &amp; flooded forest (NISAR dates)</label>
+  <label class="chk"><input type="checkbox" id="c3d" checked> 3D patches (height = hectares)</label>
+  <label class="chk"><input type="checkbox" id="cPins" checked> Hotspot pins</label>
+  <div class="muted">Show patches</div>
+  <select id="fConf">
+    <option value="0">All detections</option>
+    <option value="1">Medium + high confidence</option>
+    <option value="2">High confidence only (≥ 2 independent sensors)</option>
+  </select>
+  <div class="muted" style="margin-top:6px">Colour patches by</div>
+  <select id="pColor"><option value="month">Month of clearing</option><option value="conf">Confidence</option></select>
+  <div class="muted" style="margin-top:6px">Terrain exaggeration: <span id="exv">2.0</span>×</div>
+  <input id="exag" type="range" min="1" max="6" step="0.5" value="2">
+
+  <h2>Water &amp; flood · NISAR dates</h2>
+  <div class="big" id="nlabel">—</div>
+  <input id="nrange" type="range" min="1" max="1" value="1" step="1">
+  <canvas id="cWaterChart" width="660" height="230"></canvas>
+
+  <h2>Selected</h2>
+  <div id="info" class="muted">Click a pin or a patch.</div>
+  <div id="badges"></div>
+  <canvas id="spark" width="660" height="230"></canvas>
+  <canvas id="spark2" width="660" height="230"></canvas>
+
+  <h2>Biggest clearings</h2>
+  <div id="plist" class="muted">—</div>
+
+  <details open><summary>Legend</summary>
+    <div class="muted" style="margin-top:6px">
+      <span class="chip" style="background:#69f0ae"></span>L-band confirms the alert<br>
+      <span class="chip" style="background:#ff1744"></span>L-band says forest → doubtful<br>
+      <span class="chip" style="background:#ffc107"></span>no L-band data<br>
+      <span class="chip" style="background:#00b0ff"></span>L-band-only change (check)<br>
+      <span class="chip" style="background:#2979ff"></span>open water &nbsp;
+      <span class="chip" style="background:#00e5ff"></span>flooded forest
+    </div>
+  </details>
+  <details><summary>How false alarms are controlled</summary>
+    <div class="muted" style="margin-top:6px">
+      A Sentinel-1 drop must persist for months. Each patch is then checked by <b>independent</b> evidence:
+      NISAR L-band (HV far below intact forest), Sentinel-2 vegetation loss (NDVI), and RADD alerts.
+      <b>High</b> = at least two agree. Rivers and permanent water are masked; patches on steep ground or
+      floodplain are flagged for review. Nothing is claimed to be 100 % — see the validation numbers below.
+    </div>
+    <div id="valid" class="muted" style="margin-top:6px"></div>
+  </details>
+  <details><summary>Why L-band? (physics)</summary>
+    <div class="muted" style="margin-top:6px">
+      NISAR's L-band (24 cm) passes through leaves and scatters from branches and trunks. Cross-pol <b>HV</b> is
+      therefore a proxy for woody biomass: when forest is cut, HV collapses. Co-pol <b>HH</b> can bounce off water
+      and tree trunks (double-bounce), so flooded forest turns bright while open water turns dark — the “breathing” of
+      the Amazon floodplain. C-band (Sentinel-1) mostly sees the canopy top, so the two sensors complement each other.
+    </div>
+  </details>
+
+  <footer>
+    Radar alerts are <b>candidate</b> clearings — confirm with optical and field data.<br>
+    Contains modified Copernicus Sentinel data 2025–2026 (Google Earth Engine). NISAR data: NASA / ISRO, distributed by ASF DAAC.
+    Terrain: AWS Terrain Tiles (Mapzen). Basemap: Sentinel-2 cloudless by EOX.
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var T0 = performance.now();
+  var ROOT = new URL('.', location.href).href;
+  var TERRARIUM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+  var BASEMAP = 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg';
+  var CONF_COL = {high: '#69f0ae', medium: '#ffd54f', low: '#ff1744'};
+
+  var $ = function (id) { return document.getElementById(id); };
+  var state = {k: 1, nt: 1, mode: 'radar', ovDate: true, ovConf: false, ovWater: false, exag: 2, area: null,
+               minScore: 0, pcolor: 'month', selected: null, timer: null, tour: null};
+  var N = 9, MAN = null, areas = [], feats = [], byId = {};
+
+  // ───────────── two linked maps (before | after) ─────────────
+  function makeMap(container) {
+    return new maplibregl.Map({
+      container: container,
+      style: {version: 8, sources: {}, layers: [{id: 'bg', type: 'background', paint: {'background-color': '#05080f'}}]},
+      center: [-60, -6], zoom: 4.2, pitch: 0, maxPitch: 80, attributionControl: false
+    });
+  }
+  var mA = makeMap('mapA'), mB = makeMap('mapB');
+  mB.addControl(new maplibregl.AttributionControl({compact: true}), 'bottom-right');
+  var syncing = false;
+  function link(src, dst) {
+    src.on('move', function () {
+      if (syncing) { return; }
+      syncing = true;
+      dst.jumpTo({center: src.getCenter(), zoom: src.getZoom(), bearing: src.getBearing(), pitch: src.getPitch()});
+      syncing = false;
+    });
+  }
+  link(mA, mB); link(mB, mA);
+  function whenLoaded(m) { return new Promise(function (res) { if (m.loaded()) { res(); } else { m.once('load', res); } }); }
+
+  var divider = $('divider'), dragging = false;
+  function setSplit(frac) {
+    frac = Math.max(0.02, Math.min(0.98, frac));
+    $('mapB').style.clipPath = 'inset(0 0 0 ' + (frac * 100) + '%)';
+    divider.style.left = (frac * 100) + '%';
+  }
+  divider.addEventListener('pointerdown', function (e) { dragging = true; e.preventDefault(); });
+  window.addEventListener('pointermove', function (e) { if (dragging) { setSplit(e.clientX / window.innerWidth); } });
+  window.addEventListener('pointerup', function () { dragging = false; });
+
+  // ───────────── helpers ─────────────
+  function monthLabel(k) { return (MAN && MAN.months && MAN.months[k - 1]) || ('Month ' + k); }
+  function fmt(n, d) { return (n === null || n === undefined) ? '—' : Number(n).toFixed(d); }
+  function areaOf(id) { for (var i = 0; i < areas.length; i++) { if (areas[i].id === id) { return areas[i]; } } return null; }
+  function curArea() { return areaOf(state.area) || areas.filter(function (a) { return a.nisar; })[0] || areas[0]; }
+
+  function monthColorExpr(palette) {
+    var expr = ['interpolate', ['linear'], ['get', 'monthIdx']];
+    var P = palette.length, span = Math.max(N - 1, 1);
+    for (var j = 0; j < P; j++) { expr.push(1 + (j * span) / (P - 1)); expr.push(palette[j]); }
+    return expr;
+  }
+  var CONF_EXPR = ['match', ['get', 'conf'], 'high', CONF_COL.high, 'medium', CONF_COL.medium, CONF_COL.low];
+  var SQ = ['sqrt', ['get', 'ha']];
+  var HEIGHT = ['+', 20, ['*', 14, SQ]];
+  var CORE_R = ['interpolate', ['linear'], ['zoom'], 4, ['+', 2, ['*', 0.35, SQ]], 12, ['+', 4, ['*', 0.9, SQ]]];
+  var GLOW_R = ['interpolate', ['linear'], ['zoom'], 4, ['+', 6, SQ], 12, ['+', 12, ['*', 2.2, SQ]]];
+  var EMPTY_FC = {type: 'FeatureCollection', features: []};
+
+  // ───────────── map content ─────────────
+  function setupCommon(m) {
+    m.addSource('basemap', {type: 'raster', tiles: [BASEMAP], tileSize: 256, maxzoom: 9,
+      attribution: 'Sentinel-2 cloudless © EOX (CC BY-NC 4.0) · contains Copernicus data'});
+    m.addLayer({id: 'basemap', type: 'raster', source: 'basemap', paint: {'raster-fade-duration': 0}});
+    m.addSource('terrain', {type: 'raster-dem', tiles: [TERRARIUM], encoding: 'terrarium', tileSize: 256, maxzoom: 15,
+      attribution: 'Terrain © Mapzen / AWS Terrain Tiles'});
+    m.addLayer({id: 'hills', type: 'hillshade', source: 'terrain',
+      paint: {'hillshade-exaggeration': 0.45, 'hillshade-shadow-color': '#000000', 'hillshade-highlight-color': '#ffffff'}});
+    m.setTerrain({source: 'terrain', exaggeration: state.exag});
+  }
+
+  function addRaster(m, a, name, opacity) {
+    var L = a.layers[name], id = a.id + ':' + name;
+    if (!L) { return; }
+    m.addSource(id, {type: 'raster', scheme: 'xyz', tileSize: 256, bounds: a.bbox, minzoom: L.minzoom, maxzoom: L.maxzoom,
+      tiles: [ROOT + a.tiles + '/' + name + '/{z}/{x}/{y}.' + L.ext]});
+    m.addLayer({id: id, type: 'raster', source: id, layout: {visibility: 'none'},
+      paint: {'raster-fade-duration': 0, 'raster-opacity': opacity}});
+  }
+
+  function addAreaLayers(m, side) {                      // base pictures first, overlays on top of them
+    areas.forEach(function (a) {
+      if (side === 'A') {
+        ['before', 'nisar_before', 'opt_before'].forEach(function (n) { addRaster(m, a, n, 1); });
+      } else {
+        var k, t, T = a.nisar ? a.nisar.dates.length : 0;
+        for (k = 1; k <= N; k++) { addRaster(m, a, 'after_' + k, 1); }
+        addRaster(m, a, 'nisar_after', 1); addRaster(m, a, 'opt_after', 1);
+        for (k = 1; k <= N; k++) { addRaster(m, a, 'date_' + k, 0.95); }
+        for (t = 1; t <= T; t++) { addRaster(m, a, 'water_' + t, 0.85); }
+        addRaster(m, a, 'nconf', 0.9);
+      }
+    });
+  }
+
+  function addPatchLayers(m, with3d, patchesFC, pinsFC) {
+    m.addSource('patches', {type: 'geojson', data: patchesFC});
+    m.addSource('pins', {type: 'geojson', data: pinsFC});
+    m.addSource('sel', {type: 'geojson', data: EMPTY_FC});
+    if (with3d) {
+      m.addLayer({id: 'patch-3d', type: 'fill-extrusion', source: 'patches', minzoom: 10, paint: {
+        'fill-extrusion-color': monthColorExpr(MAN.palette), 'fill-extrusion-height': HEIGHT,
+        'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.92}});
+      m.addLayer({id: 'patch-line', type: 'line', source: 'patches', minzoom: 11,
+        paint: {'line-color': '#ffffff', 'line-width': 1}});
+    }
+    m.addLayer({id: 'pins-glow', type: 'circle', source: 'pins', paint: {
+      'circle-radius': GLOW_R, 'circle-color': monthColorExpr(MAN.palette), 'circle-opacity': 0.3, 'circle-blur': 0.9}});
+    m.addLayer({id: 'pins', type: 'circle', source: 'pins', paint: {
+      'circle-radius': CORE_R, 'circle-color': monthColorExpr(MAN.palette), 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1,
+      'circle-opacity': ['interpolate', ['linear'], ['zoom'], 10, 1, 14, 0.35]}});
+    m.addLayer({id: 'sel-ring', type: 'circle', source: 'sel', paint: {
+      'circle-radius': 16, 'circle-color': 'rgba(0,229,255,0.12)', 'circle-stroke-color': '#00e5ff', 'circle-stroke-width': 3}});
+  }
+
+  function setVis(m, id, on) { if (m.getLayer(id)) { m.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'); } }
+
+  function patchFilter() {
+    return ['all', ['<=', ['get', 'monthIdx'], state.k], ['>=', ['get', 'score'], state.minScore]];
+  }
+
+  function refreshLayers() {
+    var mode = state.mode;
+    areas.forEach(function (a) {
+      var T = a.nisar ? a.nisar.dates.length : 0, tcur = Math.min(state.nt, T), k, t;
+      setVis(mA, a.id + ':before', mode === 'radar');
+      setVis(mA, a.id + ':nisar_before', mode === 'lband');
+      setVis(mA, a.id + ':opt_before', mode === 'opt');
+      setVis(mB, a.id + ':nisar_after', mode === 'lband');
+      setVis(mB, a.id + ':opt_after', mode === 'opt');
+      for (k = 1; k <= N; k++) {
+        setVis(mB, a.id + ':after_' + k, mode === 'radar' && k === state.k);
+        setVis(mB, a.id + ':date_' + k, state.ovDate && k === state.k);
+      }
+      for (t = 1; t <= T; t++) { setVis(mB, a.id + ':water_' + t, state.ovWater && t === tcur); }
+      setVis(mB, a.id + ':nconf', state.ovConf);
+    });
+    var f = patchFilter();
+    [mA, mB].forEach(function (m) {
+      ['patch-3d', 'patch-line', 'pins', 'pins-glow'].forEach(function (id) { if (m.getLayer(id)) { m.setFilter(id, f); } });
+    });
+    $('klabel').textContent = monthLabel(state.k);
+    $('krange').value = state.k;
+    var ca = curArea(), nd = ca && ca.nisar ? ca.nisar.dates : [];
+    $('nlabel').textContent = nd.length ? nd[Math.min(state.nt, nd.length) - 1] + '  (' + (ca.name) + ')' : 'no NISAR data loaded';
+    $('capA').textContent = mode === 'radar' ? '◀ BEFORE · C-band baseline (all 2025)'
+      : mode === 'lband' ? '◀ BEFORE · NISAR L-band HV, first dates' : '◀ BEFORE · Sentinel-2 (last 6 months of 2025)';
+    $('capB').textContent = mode === 'radar' ? 'AFTER ▶ C-band · ' + monthLabel(state.k)
+      : mode === 'lband' ? 'AFTER ▶ NISAR L-band HV, latest dates' : 'AFTER ▶ Sentinel-2 · latest 3 months';
+    renderDashboard(); renderWaterChart();
+  }
+
+  // ───────────── canvases ─────────────
+  function clearCanvas(c) { var g = c.getContext('2d'); g.clearRect(0, 0, c.width, c.height); return g; }
+  function note(c, text) { var g = clearCanvas(c); g.fillStyle = '#8b98a9'; g.font = '20px sans-serif'; g.fillText(text, 20, c.height / 2); }
+
+  function drawBars(c, vals, labels, colors, title) {
+    var g = clearCanvas(c), W = c.width, H = c.height, mx = Math.max.apply(null, vals.concat([1]));
+    g.fillStyle = '#e6edf3'; g.font = '18px sans-serif'; g.fillText(title, 10, 22);
+    var bw = (W - 50) / vals.length;
+    vals.forEach(function (v, i) {
+      var h = (H - 70) * v / mx, x = 40 + i * bw;
+      g.fillStyle = colors[i] || '#ff1744'; g.fillRect(x + 3, H - 30 - h, bw - 6, h);
+      g.fillStyle = '#8b98a9'; g.font = '15px sans-serif'; g.fillText(labels[i], x + 2, H - 10);
+      if (v > 0) { g.fillText(Math.round(v), x + 3, H - 34 - h); }
+    });
+  }
+
+  function drawLines(c, series, labels, marker, title, unit) {
+    var g = clearCanvas(c), W = c.width, H = c.height, all = [];
+    series.forEach(function (s) { s.v.forEach(function (v) { if (v !== null && v !== undefined) { all.push(v); } }); });
+    if (all.length < 2) { note(c, 'no data'); return; }
+    var lo = Math.min.apply(null, all), hi = Math.max.apply(null, all);
+    if (hi - lo < 1e-6) { hi = lo + 1; }
+    var x = function (i) { return 50 + (W - 70) * i / Math.max(labels.length - 1, 1); };
+    var y = function (v) { return 40 + (H - 90) * (1 - (v - lo) / (hi - lo)); };
+    g.fillStyle = '#e6edf3'; g.font = '18px sans-serif'; g.fillText(title, 10, 22);
+    g.strokeStyle = '#1e2a3d'; g.beginPath(); g.moveTo(50, 36); g.lineTo(50, H - 40); g.lineTo(W - 15, H - 40); g.stroke();
+    g.fillStyle = '#8b98a9'; g.font = '15px sans-serif';
+    g.fillText(fmt(hi, 1) + unit, 2, 46); g.fillText(fmt(lo, 1), 2, H - 42);
+    g.fillText(labels[0].slice(2), 40, H - 18); g.fillText(labels[labels.length - 1].slice(2), W - 85, H - 18);
+    if (marker !== null && marker !== undefined) { g.strokeStyle = '#4a5a72'; g.beginPath(); g.moveTo(x(marker), 36); g.lineTo(x(marker), H - 40); g.stroke(); }
+    series.forEach(function (s, si) {
+      g.strokeStyle = s.color; g.lineWidth = 3; g.beginPath(); var started = false;
+      s.v.forEach(function (v, i) { if (v === null || v === undefined) { return; } if (!started) { g.moveTo(x(i), y(v)); started = true; } else { g.lineTo(x(i), y(v)); } });
+      g.stroke(); g.lineWidth = 1;
+      s.v.forEach(function (v, i) { if (v === null || v === undefined) { return; } g.fillStyle = s.color; g.beginPath(); g.arc(x(i), y(v), 4, 0, 6.3); g.fill(); });
+      g.fillStyle = s.color; g.font = '15px sans-serif'; g.fillText(s.name, 60 + si * 150, H - 2);
+    });
+  }
+
+  // ───────────── dashboard / water chart ─────────────
+  function visiblePatches() {
+    return feats.map(function (f) { return f.properties; }).filter(function (p) {
+      return p.monthIdx <= state.k && p.score >= state.minScore && (state.area === null || ('a' + p.ai) === state.area);
+    });
+  }
+  function renderDashboard() {
+    var P = visiblePatches(), tot = 0, high = 0, by = {high: 0, medium: 0, low: 0}, per = [];
+    for (var i = 0; i < N; i++) { per.push(0); }
+    P.forEach(function (p) { tot += p.ha; by[p.conf] += p.ha; if (p.conf === 'high') { high += p.ha; } per[p.monthIdx - 1] += p.ha; });
+    $('kHa').textContent = Math.round(tot) + ' ha'; $('kHigh').textContent = Math.round(high) + ' ha'; $('kN').textContent = P.length;
+    $('dscope').textContent = '· ' + (state.area ? (areaOf(state.area).name) : 'whole basin') + ' · up to ' + monthLabel(state.k);
+    var bar = $('confbar'); bar.innerHTML = '';
+    ['high', 'medium', 'low'].forEach(function (c) {
+      var d = document.createElement('div'); d.style.background = CONF_COL[c]; d.style.width = (tot ? 100 * by[c] / tot : 0) + '%'; bar.appendChild(d);
+    });
+    $('confleg').textContent = 'high ' + Math.round(by.high) + ' ha · medium ' + Math.round(by.medium) + ' ha · low ' + Math.round(by.low) + ' ha';
+    var labels = [], colors = [];
+    for (var k = 1; k <= N; k++) { labels.push(monthLabel(k).slice(0, 3)); colors.push(MAN.palette[Math.min(MAN.palette.length - 1, Math.round((k - 1) * (MAN.palette.length - 1) / Math.max(N - 1, 1)))]); }
+    drawBars($('cMonth'), per, labels, colors, 'Cleared hectares by month of detection');
+  }
+  function renderWaterChart() {
+    var a = curArea(), c = $('cWaterChart');
+    if (!a || !a.nisar) { note(c, 'no NISAR data for this area yet'); return; }
+    var n = a.nisar, T = n.dates.length;
+    var series = [{name: 'open water km²', color: '#2979ff', v: n.open_km2}];
+    if (n.has_hh) { series.push({name: 'flooded forest km²', color: '#00e5ff', v: n.flood_km2}); }
+    drawLines(c, series, n.dates, Math.min(state.nt, T) - 1, 'Water & flooded forest per NISAR date (' + a.name + ')', '');
+  }
+
+  // ───────────── selection ─────────────
+  function badge(label, verdict) {
+    var cls = verdict === 'ok' ? 'b-ok' : (verdict === 'no' ? 'b-no' : (verdict === 'risk' ? 'b-risk' : 'b-na'));
+    return '<span class="badge ' + cls + '">' + label + '</span>';
+  }
+  function selectPatch(p, fly) {
+    if (!p) { return; }
+    state.selected = p;
+    var src = {type: 'FeatureCollection', features: [{type: 'Feature', properties: {}, geometry: {type: 'Point', coordinates: [p.lon, p.lat]}}]};
+    [mA, mB].forEach(function (m) { var s = m.getSource('sel'); if (s) { s.setData(src); } });
+    $('info').innerHTML = '<b>' + fmt(p.lat, 5) + ', ' + fmt(p.lon, 5) + '</b><br>' + p.area +
+      '<br><span class="big">' + fmt(p.ha, 1) + ' ha</span> · first detected <b>' + monthLabel(p.monthIdx) +
+      '</b><br>C-band drop ' + fmt(p.drop, 1) + ' dB · L-band HV drop ' + fmt(p.hv_drop, 1) + ' dB' +
+      '<br>Confidence: <b style="color:' + CONF_COL[p.conf] + '">' + p.conf.toUpperCase() + '</b> (' + p.score + ' of 3 independent sensors agree' +
+      (p.against ? ', ' + p.against + ' contradict' : '') + ')';
+    var b = badge('C-band ✓ (trigger)', 'ok');
+    b += badge('L-band ' + (p.lband === 'confirmed' ? '✓' : p.lband === 'unconfirmed' ? '✗' : '–'), p.lband === 'confirmed' ? 'ok' : p.lband === 'unconfirmed' ? 'no' : 'na');
+    b += badge('Optical ' + (p.optical === 'confirmed' ? '✓' : p.optical === 'unconfirmed' ? '✗' : '–') + (p.ndvi_drop !== null && p.ndvi_drop !== undefined ? ' ΔNDVI ' + fmt(-p.ndvi_drop, 2) : ''),
+      p.optical === 'confirmed' ? 'ok' : p.optical === 'unconfirmed' ? 'no' : 'na');
+    b += badge('RADD ' + (p.radd === 'yes' ? '✓' : '–'), p.radd === 'yes' ? 'ok' : 'na');
+    (p.risks || []).forEach(function (r) { b += badge('⚠ ' + r, 'risk'); });
+    if (p.review) { b += badge('needs review', 'risk'); }
+    $('badges').innerHTML = b;
+    var months = ['Base'].concat((MAN.months || []).map(function (m) { return m; }));
+    drawLines($('spark'), [{name: 'C-band VH (dB)', color: '#00e5ff', v: p.vh || []}], months, p.monthIdx, 'Sentinel-1 VH at this patch (dB)', ' dB');
+    var a = areaOf('a' + p.ai);
+    if (a && a.nisar && p.hv) {
+      var s2 = [{name: 'L-band HV', color: '#69f0ae', v: p.hv}];
+      if (p.hh) { s2.push({name: 'L-band HH', color: '#ffd54f', v: p.hh}); }
+      drawLines($('spark2'), s2, a.nisar.dates, null, 'NISAR L-band at this patch (dB)', ' dB');
+    } else { note($('spark2'), 'no NISAR series for this patch'); }
+    if (fly) { mB.flyTo({center: [p.lon, p.lat], zoom: p.ha > 200 ? 13 : (p.ha > 40 ? 14 : 15), pitch: 62, duration: 1800, essential: true}); }
+  }
+  function showPoint(ll) {
+    $('info').innerHTML = '<b>' + fmt(ll.lat, 5) + ', ' + fmt(ll.lng, 5) + '</b><br><span class="muted">No detected clearing here. Click a pin or a coloured patch.</span>';
+  }
+  function onMapClick(e) {
+    var m = e.target, layers = ['pins'];
+    if (m.getLayer('patch-3d')) { layers.push('patch-3d'); }
+    var hit = m.queryRenderedFeatures(e.point, {layers: layers});
+    if (hit.length && byId[hit[0].properties.id] !== undefined) { selectPatch(byId[hit[0].properties.id], false); }
+    else { showPoint(e.lngLat); }
+  }
+
+  // ───────────── panel actions ─────────────
+  function renderAreas() {
+    var box = $('alist'); box.innerHTML = '';
+    areas.slice().sort(function (a, b) { return b.ha - a.ha; }).forEach(function (a) {
+      var P = feats.filter(function (f) { return f.properties.ai === a.index; }).map(function (f) { return f.properties; });
+      var hi = P.filter(function (p) { return p.conf === 'high'; }).reduce(function (s, p) { return s + p.ha; }, 0);
+      var b = document.createElement('button'); b.className = 'btn';
+      b.textContent = a.name + ' — ' + Math.round(a.ha) + ' ha (' + Math.round(hi) + ' high-conf.)' + (a.nisar ? ' · NISAR ✓' : '');
+      b.onclick = function () { stopTour(); goArea(a); };
+      box.appendChild(b);
+    });
+  }
+  function renderPatchList() {
+    var rows = feats.map(function (f) { return f.properties; })
+      .filter(function (p) { return p.score >= state.minScore && (state.area === null || ('a' + p.ai) === state.area); })
+      .sort(function (a, b) { return b.ha - a.ha; }).slice(0, 25);
+    var box = $('plist'); box.innerHTML = '';
+    if (!rows.length) { box.textContent = '—'; return; }
+    rows.forEach(function (p, i) {
+      var b = document.createElement('button'); b.className = 'btn';
+      b.textContent = '#' + (i + 1) + '  ' + fmt(p.lat, 4) + ', ' + fmt(p.lon, 4) + ' · ' + fmt(p.ha, 1) + ' ha · ' + monthLabel(p.monthIdx) + ' · ' + p.conf;
+      b.onclick = function () { selectPatch(p, true); };
+      box.appendChild(b);
+    });
+  }
+  function goArea(a) {
+    state.area = a.id;
+    var T = a.nisar ? a.nisar.dates.length : 1;
+    $('nrange').max = Math.max(T, 1); state.nt = Math.min(state.nt, T) || 1; $('nrange').value = state.nt;
+    renderPatchList(); refreshLayers();
+    mB.flyTo({center: a.center, zoom: 11.3, pitch: 58, bearing: -25, duration: 2200, essential: true});
+  }
+  function goBasin() {
+    state.area = null; renderPatchList(); refreshLayers();
+    var w = 180, s = 90, e = -180, n = -90;
+    areas.forEach(function (a) { w = Math.min(w, a.bbox[0]); s = Math.min(s, a.bbox[1]); e = Math.max(e, a.bbox[2]); n = Math.max(n, a.bbox[3]); });
+    mB.fitBounds([[w, s], [e, n]], {padding: {top: 60, bottom: 80, left: 400, right: 60}, duration: 1500, maxZoom: 7});
+  }
+  function setMode(mode) {
+    state.mode = mode;
+    $('mRadar').className = 'btn' + (mode === 'radar' ? ' on' : '');
+    $('mL').className = 'btn' + (mode === 'lband' ? ' on' : '');
+    $('mOpt').className = 'btn' + (mode === 'opt' ? ' on' : '');
+    refreshLayers();
+  }
+  function setExag(v) { state.exag = v; $('exv').textContent = Number(v).toFixed(1); [mA, mB].forEach(function (m) { m.setTerrain({source: 'terrain', exaggeration: v}); }); }
+  function setPatchColor(mode) {
+    state.pcolor = mode;
+    var expr = mode === 'conf' ? CONF_EXPR : monthColorExpr(MAN.palette);
+    if (mB.getLayer('patch-3d')) { mB.setPaintProperty('patch-3d', 'fill-extrusion-color', expr); }
+    [mA, mB].forEach(function (m) { ['pins', 'pins-glow'].forEach(function (id) { if (m.getLayer(id)) { m.setPaintProperty(id, 'circle-color', expr); } }); });
+  }
+
+  // ───────────── guided tour ─────────────
+  function stopTour() {
+    if (state.tour) { clearTimeout(state.tour); state.tour = null; }
+    $('story').style.display = 'none'; $('tour').textContent = '🎬 Guided tour';
+  }
+  function startTour() {
+    if (state.tour) { stopTour(); return; }
+    var stops = areas.slice().sort(function (a, b) { return b.ha - a.ha; }).slice(0, 5), i = 0;
+    $('tour').textContent = '⏹ Stop tour';
+    state.mode = 'radar'; setMode('radar');
+    function next() {
+      if (i >= stops.length) { stopTour(); goBasin(); return; }
+      var a = stops[i++];
+      state.k = N; refreshLayers(); goArea(a);
+      $('story').style.display = 'block';
+      $('story').innerHTML = '<b>' + a.name + '</b><br>' + (a.story || '') + '<br><span class="muted">' + Math.round(a.ha) + ' ha cleared · ' + a.count + ' patches' + (a.nisar ? ' · confirmed by NISAR L-band where data exist' : '') + '</span>';
+      state.tour = setTimeout(next, 9000);
+    }
+    state.tour = setTimeout(function () {}, 0);
+    next();
+  }
+
+  function wireUI() {
+    $('krange').max = N;
+    $('krange').oninput = function () { state.k = parseInt(this.value, 10); refreshLayers(); };
+    $('nrange').oninput = function () { state.nt = parseInt(this.value, 10); refreshLayers(); };
+    $('play').onclick = function () {
+      if (state.timer) { clearInterval(state.timer); state.timer = null; $('play').textContent = '▶ Play time-lapse'; return; }
+      $('play').textContent = '⏸ Pause';
+      state.timer = setInterval(function () { state.k = state.k >= N ? 1 : state.k + 1; refreshLayers(); }, 1000);
+    };
+    $('mRadar').onclick = function () { setMode('radar'); };
+    $('mL').onclick = function () { setMode('lband'); };
+    $('mOpt').onclick = function () { setMode('opt'); };
+    $('vTop').onclick = function () { mB.easeTo({pitch: 0, bearing: 0, duration: 800}); };
+    $('v3d').onclick = function () { mB.easeTo({pitch: 65, duration: 800}); };
+    $('cDate').onchange = function () { state.ovDate = this.checked; refreshLayers(); };
+    $('cConf').onchange = function () { state.ovConf = this.checked; refreshLayers(); };
+    $('cWater').onchange = function () { state.ovWater = this.checked; refreshLayers(); };
+    $('c3d').onchange = function () { var on = this.checked; setVis(mB, 'patch-3d', on); setVis(mB, 'patch-line', on); };
+    $('cPins').onchange = function () { var on = this.checked; [mA, mB].forEach(function (m) { setVis(m, 'pins', on); setVis(m, 'pins-glow', on); }); };
+    $('fConf').onchange = function () { state.minScore = parseInt(this.value, 10); renderPatchList(); refreshLayers(); };
+    $('pColor').onchange = function () { setPatchColor(this.value); };
+    $('exag').oninput = function () { setExag(parseFloat(this.value)); };
+    $('bBasin').onclick = function () { stopTour(); goBasin(); };
+    $('tour').onclick = startTour;
+    [mA, mB].forEach(function (m) {
+      m.on('click', onMapClick);
+      m.on('mouseenter', 'pins', function () { m.getCanvas().style.cursor = 'pointer'; });
+      m.on('mouseleave', 'pins', function () { m.getCanvas().style.cursor = ''; });
+    });
+  }
+
+  function renderValidation() {
+    var v = MAN.validation; if (!v) { return; }
+    var line = function (name, o) { return name + ': ' + (o && o.pct !== null && o.pct !== undefined ? o.agree + ' of ' + o.checked + ' patches agree (' + o.pct + ' %)' : 'no data'); };
+    $('valid').innerHTML = '<b>This scan</b> — ' + v.patches + ' patches, ' + Math.round(v.ha) + ' ha<br>' +
+      'high ' + v.by_conf.high.patches + ' · medium ' + v.by_conf.medium.patches + ' · low ' + v.by_conf.low.patches + '<br>' +
+      line('L-band (NISAR)', v.lband) + '<br>' + line('Optical (NDVI)', v.optical) + '<br>' + line('RADD overlap', v.radd) + '<br>' +
+      v.review + ' patches flagged for review (steep ground or floodplain).';
+  }
+
+  // ───────────── start ─────────────
+  function init(manifest, patchesFC) {
+    MAN = manifest; N = manifest.N; areas = manifest.areas; feats = patchesFC.features;
+    feats.forEach(function (f) { byId[f.properties.id] = f.properties; });
+    var pinsFC = {type: 'FeatureCollection', features: feats.map(function (f) {
+      var p = f.properties;
+      return {type: 'Feature', geometry: {type: 'Point', coordinates: [p.lon, p.lat]},
+              properties: {id: p.id, ha: p.ha, monthIdx: p.monthIdx, score: p.score, conf: p.conf}};
+    })};
+    [mA, mB].forEach(setupCommon);
+    addAreaLayers(mA, 'A'); addAreaLayers(mB, 'B');
+    addPatchLayers(mA, false, patchesFC, pinsFC); addPatchLayers(mB, true, patchesFC, pinsFC);
+    state.k = N;
+    var hasOpt = areas.some(function (a) { return !!a.layers.opt_after; });
+    var hasL = areas.some(function (a) { return !!a.nisar; });
+    $('mOpt').disabled = !hasOpt; $('mL').disabled = !hasL;
+    var maxT = Math.max.apply(null, areas.map(function (a) { return a.nisar ? a.nisar.dates.length : 1; }).concat([1]));
+    $('nrange').max = maxT; $('nrange').value = 1; state.nt = 1;
+    wireUI(); renderAreas(); renderPatchList(); renderValidation(); refreshLayers(); setSplit(0.5);
+    goBasin();
+    mB.once('idle', function () { $('ready').textContent = '⚡ first view in ' + ((performance.now() - T0) / 1000).toFixed(1) + ' s · all tiles pre-rendered'; });
+  }
+
+  function fail(err) {
+    $('ready').textContent = 'could not load';
+    $('err').textContent = '⚠ ' + (err && err.message ? err.message : err) +
+      ' — open this page through a web server (python -m http.server), not file://, and keep manifest.json + patches.geojson + tiles/ next to it.';
+  }
+
+  Promise.all([
+    fetch('manifest.json').then(function (r) { if (!r.ok) { throw new Error('manifest.json not found'); } return r.json(); }),
+    fetch('patches.geojson').then(function (r) { if (!r.ok) { throw new Error('patches.geojson not found'); } return r.json(); }),
+    whenLoaded(mA), whenLoaded(mB)
+  ]).then(function (res) { init(res[0], res[1]); }).catch(fail);
+})();
+</script>
+</body>
+</html>
